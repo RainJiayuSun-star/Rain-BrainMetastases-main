@@ -9,6 +9,7 @@ This directory contains the pipeline guideline and automated scripts for preproc
 * **`Preprocessing Pipeline-May 2023 1.pdf`**: The official lab guideline detailing the step-by-step mathematical and coordinate transformations.
 * **`align/`**: Contains scripts and outputs for Step 1 (co-registration and spatial alignment).
   * **`logging_COREG_RainScript.py`**: Automated pipeline script for co-registering FLAIR and tumor masks onto the baseline T1CE grid and modal stacking.
+  * self note: use nnUnet conda env
 * **`Jared/`**: Contains automated pipeline scripts implementing the core downstream preprocessing steps (Skull Stripping, Bias Correction, and Intensity Normalization).
 
 ---

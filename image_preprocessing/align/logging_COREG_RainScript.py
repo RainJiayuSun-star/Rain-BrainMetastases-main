@@ -64,7 +64,7 @@ PARAMETERS = {
 
 # C. Root Path Configuration
 INPUT_ROOT = r"/mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/Medical_Images_Public/Brain-Mets-Lung-MRI-Path-Segs_CLEAN"
-OUTPUT_ROOT = r"/mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/brain_metastases_main/image_preprocessing/align/output"
+OUTPUT_ROOT = r"/mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/Medical_Images_Public/Brain-Mets-Lung-MRI-Path-Segs_Coregistered"
 EXCEL_ROOT = None
 
 # D. Patient Selection (Subset Control)

@@ -1,0 +1,63 @@
+==================================================
+OPERATION: Image Co-registration and Stacking
+==================================================
+
+--- ENVIRONMENT INFO ---
+Python version: 3.10.20
+OS/Platform: Linux-5.15.167.4-microsoft-standard-WSL2-x86_64-with-glibc2.39
+
+Libraries/Packages versions:
+ - pandas: 2.3.3
+
+--- PATHS ---
+input_root: /mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/Medical_Images_Public/Brain-Mets-Lung-MRI-Path-Segs_CLEAN 
+
+output_root: /mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/brain_metastases_main/image_preprocessing/align/output 
+
+excel_root: N/A (directory scan used) 
+
+log_pdf: /mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/brain_metastases_main/image_preprocessing/align/output/MainRun_Image_Co-registration_and_Stacking_pipeline_log.pdf 
+
+error_excel: /mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/brain_metastases_main/image_preprocessing/align/output/MainRun_Image_Co-registration_and_Stacking_pipeline_errors.xlsx 
+
+
+--- PARAMETERS ---
+resample_only: True
+
+--- STARTING PATIENT LIST ---
+Total starting patient files: 1
+  0. Patient ID YG_0AXGKD8AFJGS, T1CE: YG_HAEAKFOSOSWC_t1ce_img.nii.gz
+
+--------------------------------------------------
+
+>> Patient: YG_0AXGKD8AFJGS ...
+
+>> T1CE (Fixed):  YG_HAEAKFOSOSWC_t1ce_img.nii.gz
+>> FLAIR (Moving): YG_HAEAKFOSOSWC_flair_img.nii.gz
+>> Output Folder: /mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/brain_metastases_main/image_preprocessing/align/output/YG_0AXGKD8AFJGS
+
+--------------------------------------------------
+Image Co-registration and Stacking PRINT-OUT START, For Run 1 of 1
+   [I/O] Reading images and masks for patient YG_0AXGKD8AFJGS...
+   [Grid] Fixed grid (T1CE) size: (256, 256, 224), spacing: (1.0, 1.0, 1.0)
+   [Grid] Moving grid (FLAIR) size: (256, 256, 94), spacing: (1.0, 1.0, 2.0)
+   [Coreg] Resampling mode: Header-based coordinate resampling (Identity Transform)...
+   [Resample] Resampling FLAIR image with Linear interpolation...
+   [Resample] Resampling whole tumor segmentation with Nearest Neighbor...
+   [Resample] Standardizing core tumor segmentation onto fixed grid...
+   [Stack] Stacking aligned T1CE and FLAIR structural channels...
+   [Stack] Creating merged categorical label map...
+   [Write] Saving results...
+   [Done] Successfully registered, resampled, and stacked patient volumes!
+Image Co-registration and Stacking PRINT-OUT END, For Run 1 of 1
+
+--------------------------------------------------
+   [Done] Successfully processed patient YG_0AXGKD8AFJGS (1.1s).
+
+==================================================
+--- ENDING SUMMARY ---
+Total patient files attempted: 1
+Total errors: 0
+Total execution time: 1.2s
+  0. Patient ID YG_0AXGKD8AFJGS (Aligned & Stacked)
+==================================================

@@ -1,0 +1,22 @@
+--- PAGE 1 ---
+Pre-processing pipeline 
+1- Co-register all modalities. 
+2- Do skull stripping – you can use ANTs forward transformation script for that. 
+3- Perform bias correction on (2). 
+4- Obtain the tumor mask using either nnUnet model or manual delineation 
+5- Perform ANTs diffeomorphic transformation to register the subject in (3) to the MNI space (skull-
+stripped and bias corrected); this assures forward and inverse transforms are applied only once  
+6- Perform intensity normalization on Step 5 result. 
+Your output file that you are using for the deformation pipeline should look like this: 
+'T1_SS_BiasCorrect_MNI_InverseWarp_DeformMag_Normalized.nii.gz' 
+Additionally, prior to extracting your deformation value statistics, you many need to apply linear scaling 
+or Z-score normalization to make sure all values are in the same range from your deformation 
+magnitude file output by ANTs. 
+ 
+Example: 
+deform=load_untouch_nii('T1_SS_BiasCorrect_MNI_InverseWarp_DeformMag_Normalized.nii.gz');  
+%%Apply linear scaling 
+deform.img = (deform.img - min(min(min(deform.img))))./(max(max(max(deform.img)))-
+min(min(min(deform.img)))); 
+ 
+
