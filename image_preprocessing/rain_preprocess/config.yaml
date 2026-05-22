@@ -1,0 +1,35 @@
+# IDiA Lab Unified Preprocessing Configuration
+# ==========================================
+
+# 1. Directory Root Configurations
+# Specify the input root (containing patient directories) and the desired output root.
+input_dir: "/mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/Medical_Images_Public/Brain-Mets-Lung-MRI-Path-Segs_Coregistered"
+output_dir: "/mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/Medical_Images_Public/Brain-Mets-Lung-MRI-Path-Segs_Preprocessed"
+
+# 2. Selected Pipeline Steps
+# Specify which steps to execute in your chain:
+#   1: Mutual-Information Co-registration (Align FLAIR to T1post/T1CE)
+#   2: HD-BET Skull Stripping
+#   3: N4 Bias Field Correction
+#   5: ANTs Template Space Warping (Requires a valid template_path below)
+#   6: Percentile Intensity Normalization
+steps: [3, 6]  # Example: Only perform N4 Bias Correction and Intensity Normalization
+
+# 3. Reference Template (Only required if Step 5 is enabled)
+# E.g., Path to MNI152 or SRI-24 reference volume
+template_path: "/mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/brain_metastases_main/image_preprocessing/templates/SRI24_template.nii.gz"
+
+# 4. Device configurations
+# Use "cuda" for GPU acceleration (Step 2 HD-BET) or "cpu"
+device: "cpu"
+
+# 5. Algorithm Hyperparameters
+n4_params:
+  shrink_factor: 2          # Downsampling factor for speed (1 = slow/highest accuracy, 2 = standard)
+  num_iters: 50             # Iteration count per resolution level
+  convergence_thresh: 0.000001
+
+in_params:
+  lower_percentile: 0.01    # Clamp/discard bottom 1% noise voxels
+  upper_percentile: 0.99    # Clamp/discard top 1% hyperintensity voxels
+  target_max: 4000.0        # Rescale remaining intensities linearly to [0, target_max]
