@@ -66,6 +66,42 @@ python rain_preprocess.py config.yaml
 
 ---
 
+## 🐳 Docker Deployment
+
+A pre-configured premium Docker environment with PyTorch (CUDA 12.1), SimpleITK, HD-BET, nnUNetv2, and standard Python image libraries is provided to ensure consistent and portable execution of the pipeline.
+
+### 1. Build the Docker Image
+From the repository root directory, run:
+```bash
+docker build -t rain_preprocess:latest -f image_preprocessing/rain_preprocess/Dockerfile image_preprocessing/rain_preprocess/
+```
+
+### 2. Run the Docker Container
+Run the container with GPU support and mount your local directories (e.g., datasets and templates):
+```bash
+docker run --gpus all -it \
+  -v /path/to/local/input:/data/input \
+  -v /path/to/local/output:/data/output \
+  -v /path/to/local/templates:/data/templates \
+  rain_preprocess:latest
+```
+
+### 3. Run Preprocessing inside Container
+Once inside the container shell, configure your `/workspace/rain_preprocess/config.yaml` to point to the mounted paths:
+```yaml
+input_dir: "/data/input"
+output_dir: "/data/output"
+template_path: "/data/templates/sri24_anatomy.nifti.zip"
+device: "cuda"  # for GPU skull stripping
+```
+Then start the execution:
+```bash
+cd /workspace/rain_preprocess
+python rain_preprocess.py config.yaml
+```
+
+---
+
 ## 📈 Intermediate Outputs & Logging
 *   **Final Outputs**: Are mirrored perfectly by Patient ID directly under `output_dir/`.
 *   **Intermediates**: To keep your final directory pristine, intermediate outputs of each step are stored separately under `output_dir/intermediates/step_X/` (e.g., `output_dir/intermediates/step_3/YG_0AXGKD8AFJGS/`).
