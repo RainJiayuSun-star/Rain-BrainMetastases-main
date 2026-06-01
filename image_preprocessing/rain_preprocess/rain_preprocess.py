@@ -336,7 +336,7 @@ def run_pipeline(config_path):
             # Auto-detect modal sequences
             flair_file = next((f for f in all_p_files if "flair" in f.lower() and f.endswith(".nii.gz")), None)
             t1ce_file = next((f for f in all_p_files if ("t1ce" in f.lower() or "t1post" in f.lower()) and f.endswith(".nii.gz")), None)
-            mask_file = next((f for f in all_p_files if "mask" in f.lower() or "bet" in f.lower() or "_seg" in f.lower()), None)
+            mask_file = next((f for f in all_p_files if "mask" in f.lower() or "bet" in f.lower()), None)
             
             # Fallback if no specific naming, just grab first two files
             if not t1ce_file and len(all_p_files) > 0:

@@ -4,7 +4,7 @@
 # 1. Directory Root Configurations
 # Specify the input root (containing patient directories) and the desired output root.
 input_dir: "/mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/Medical_Images_Public/Brain-Mets-Lung-MRI-Path-Segs_Coregistered"
-output_dir: "/mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/Medical_Images_Public/Brain-Mets-Lung-MRI-Path-Segs_Preprocessed"
+output_dir: "/mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/Medical_Images_Public/Brain-Mets-Lung-MRI-Path-Segs_Preprocessed2"
 
 # 2. Selected Pipeline Steps
 # Specify which steps to execute in your chain:
@@ -17,7 +17,9 @@ steps: [3, 6]  # Example: Only perform N4 Bias Correction and Intensity Normaliz
 
 # 3. Reference Template (Only required if Step 5 is enabled)
 # E.g., Path to MNI152 or SRI-24 reference volume
-template_path: "/mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/brain_metastases_main/image_preprocessing/templates/SRI24_template.nii.gz"
+template_path: "/mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/brain_metastases_main/image_preprocessing/templates/sri24_anatomy.nifti.zip"
+# template_path: "/mnt/d/A1_RainSun_20240916/1-UWMadison/IDiA-Lab/brain_metastases_main/image_preprocessing/templates/mni152_template.nii.gz"
+
 
 # 4. Device configurations
 # Use "cuda" for GPU acceleration (Step 2 HD-BET) or "cpu"
