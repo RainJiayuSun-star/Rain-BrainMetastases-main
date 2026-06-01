@@ -85,6 +85,12 @@ docker run --gpus all -it \
   -v /path/to/local/templates:/data/templates \
   rain_preprocess:latest
 ```
+or Use the --name flag inside your docker run command:
+```{bash}
+docker run --name rain_preprocess_runner --gpus all -it \
+  -v /mnt/local/data/rainsun/metastases:/workspace \
+  rain_preprocess:latest
+```
 
 ### 3. Run Preprocessing inside Container
 Once inside the container shell, configure your `/workspace/rain_preprocess/config.yaml` to point to the mounted paths:
