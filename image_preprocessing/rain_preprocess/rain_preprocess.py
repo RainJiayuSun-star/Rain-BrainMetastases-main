@@ -17,6 +17,7 @@ import sys
 import time
 import gc
 import json
+import shutil
 import traceback
 import platform
 import importlib.metadata
@@ -212,14 +213,16 @@ def step_3_n4_bias_correction(img_path, mask_path, output_path, shrink_factor=2,
     print(f"      [Step 3 Saved] Bias Corrected: {os.path.basename(output_path)}")
 
 
-def step_5_template_warp(img_path, template_path, output_path):
+def step_5_template_warp(ref_path, template_path, output_ref_path, other_images=None):
     """
     Step 5: Diffeomorphic/Affine Registration to standard Template Space (MNI152 or SRI-24).
-    Uses SimpleITK multi-resolution image registration.
+    Computes registration transform on the reference image (T1CE/T1post) and resamples all images
+    to the template space. Automatically uses Nearest Neighbor interpolation for masks/labels
+    to preserve integer values, and Linear interpolation for structural scans.
     """
-    print(f"      [Step 5] Registering {os.path.basename(img_path)} -> {os.path.basename(template_path)}")
+    print(f"      [Step 5] Registering Reference {os.path.basename(ref_path)} -> {os.path.basename(template_path)}")
     fixed = sitk.ReadImage(template_path, sitk.sitkFloat32)
-    moving = sitk.ReadImage(img_path, sitk.sitkFloat32)
+    moving = sitk.ReadImage(ref_path, sitk.sitkFloat32)
     
     # Rigid + Affine Multi-resolution registration to Template
     R = sitk.ImageRegistrationMethod()
@@ -233,10 +236,34 @@ def step_5_template_warp(img_path, template_path, output_path):
     R.SetOptimizerAsGradientDescent(learningRate=0.5, numberOfIterations=80, estimateLearningRate=R.EachIteration)
     R.SetOptimizerScalesFromPhysicalShifts()
     
+    # Compute transform
     out_tx = R.Execute(fixed, moving)
-    warped = sitk.Resample(moving, fixed, out_tx, sitk.sitkLinear, 0.0, moving.GetPixelID())
-    sitk.WriteImage(warped, output_path)
-    print(f"      [Step 5 Saved] Warped to Template: {os.path.basename(output_path)}")
+    
+    # Warp reference scan
+    warped_ref = sitk.Resample(moving, fixed, out_tx, sitk.sitkLinear, 0.0, moving.GetPixelID())
+    sitk.WriteImage(warped_ref, output_ref_path)
+    print(f"      [Step 5 Saved] Warped Reference T1-CE: {os.path.basename(output_ref_path)}")
+    
+    # Warp other modalities and segmentations using the computed transform
+    if other_images:
+        for item in other_images:
+            img_p = item['path']
+            out_p = item['out']
+            is_mask = item.get('is_mask', False)
+            
+            if not os.path.exists(img_p):
+                continue
+                
+            print(f"      [Step 5 Applying Transform] Resampling {os.path.basename(img_p)}...")
+            moving_other = sitk.ReadImage(img_p, sitk.sitkFloat32)
+            
+            # Select proper interpolation
+            interp = sitk.sitkNearestNeighbor if is_mask else sitk.sitkLinear
+            
+            # Resample and write
+            warped_other = sitk.Resample(moving_other, fixed, out_tx, interp, 0.0, moving_other.GetPixelID())
+            sitk.WriteImage(warped_other, out_p)
+            print(f"      [Step 5 Saved] Warped Scan: {os.path.basename(out_p)}")
 
 
 def step_6_intensity_normalization(img_path, mask_path, output_path, lower_p=0.01, upper_p=0.99, target_max=4000.0):
@@ -269,6 +296,269 @@ def step_6_intensity_normalization(img_path, mask_path, output_path, lower_p=0.0
 # 2. Main Orchestrator Loop
 # ==========================================
 
+def preprocess_single_patient(pid, idx, total_patients, input_dir, output_dir, steps, device, intermediates_root, n4_params, in_params, template_path):
+    print(f"\n[{idx+1}/{total_patients}] Processing Patient: {pid} ...")
+    patient_start = time.time()
+    
+    try:
+        # Core modality mapping for Yale / UCSF matching
+        p_in_dir = os.path.join(input_dir, pid)
+        all_p_files = os.listdir(p_in_dir)
+        
+        # 1. Discover Brain Mask (if already present)
+        mask_file = next((f for f in all_p_files if ("bet" in f.lower() or "brain_mask" in f.lower()) and f.endswith(".nii.gz")), None)
+        if not mask_file:
+            mask_file = next((f for f in all_p_files if "mask" in f.lower() and "seg" not in f.lower() and f.endswith(".nii.gz")), None)
+        
+        # 2. Discover Tumor Segmentations (containing "seg" or "tumor")
+        seg_files = [
+            f for f in all_p_files 
+            if ("seg" in f.lower() or "tumor" in f.lower()) 
+            and f.endswith(".nii.gz") 
+            and f != mask_file
+        ]
+        
+        # 3. Discover Reference Scan (T1CE or T1post)
+        t1ce_file = next((f for f in all_p_files if ("t1ce" in f.lower() or "t1post" in f.lower()) and f.endswith(".nii.gz")), None)
+        
+        # 4. Discover all other structural modalities (FLAIR, T1pre, T2Synth, T2, etc.)
+        other_structural_files = [
+            f for f in all_p_files 
+            if f.endswith(".nii.gz")
+            and f != t1ce_file
+            and f != mask_file
+            and f not in seg_files
+            and "subtraction" not in f.lower()
+        ]
+        
+        # Fallback if no specific naming is found
+        if not t1ce_file and len(all_p_files) > 0:
+            available_candidates = [
+                f for f in all_p_files 
+                if f.endswith(".nii.gz") 
+                and f not in seg_files 
+                and f != mask_file 
+                and "subtraction" not in f.lower()
+            ]
+            if available_candidates:
+                t1ce_file = available_candidates[0]
+                other_structural_files = [f for f in available_candidates if f != t1ce_file]
+        
+        if not t1ce_file:
+            print(f"   [{pid}] [Warning] No readable structural NIfTI scans found. Skipping.")
+            return None
+            
+        print(f"   [{pid}] Detected Sequences:")
+        print(f"   [{pid}]    - Reference/T1-CE:   {t1ce_file}")
+        print(f"   [{pid}]    - Other Structurals: {other_structural_files if other_structural_files else 'None'}")
+        print(f"   [{pid}]    - Brain Mask:        {mask_file if mask_file else 'N/A'}")
+        print(f"   [{pid}]    - Segmentations:     {seg_files if seg_files else 'None'}")
+        
+        # Setup intermediate tracks
+        current_t1_path = os.path.join(p_in_dir, t1ce_file)
+        current_other_structural_paths = {f: os.path.join(p_in_dir, f) for f in other_structural_files}
+        current_mask_path = os.path.join(p_in_dir, mask_file) if mask_file else None
+        current_seg_paths = {sf: os.path.join(p_in_dir, sf) for sf in seg_files}
+        
+        # ==========================================
+        # RUN STEPS SEQUENTIALLY
+        # ==========================================
+        
+        # --- STEP 1: CO-REGISTRATION ---
+        if 1 in steps:
+            print(f"   [{pid}] >> Running Step 1: Modality Co-registration...")
+            step_dir = os.path.join(intermediates_root, "step_1", pid)
+            os.makedirs(step_dir, exist_ok=True)
+            
+            for f, f_path in current_other_structural_paths.items():
+                out_aligned = os.path.join(step_dir, f.replace(".nii.gz", "_aligned.nii.gz"))
+                step_1_coregistration(f_path, current_t1_path, out_aligned)
+                current_other_structural_paths[f] = out_aligned
+        
+        # --- STEP 2: SKULL STRIPPING ---
+        if 2 in steps:
+            print(f"   [{pid}] >> Running Step 2: HD-BET Skull Stripping...")
+            step_dir = os.path.join(intermediates_root, "step_2", pid)
+            os.makedirs(step_dir, exist_ok=True)
+            
+            out_ss_t1 = os.path.join(step_dir, t1ce_file.replace(".nii.gz", "_SS.nii.gz"))
+            out_mask = os.path.join(step_dir, t1ce_file.replace(".nii.gz", "_SS_bet.nii.gz"))
+            
+            step_2_skull_stripping(current_t1_path, out_ss_t1, out_mask, device=device)
+            
+            current_t1_path = out_ss_t1
+            current_mask_path = out_mask
+            
+            for f, f_path in current_other_structural_paths.items():
+                img = sitk.ReadImage(f_path, sitk.sitkFloat32)
+                brain_mask = sitk.ReadImage(current_mask_path, sitk.sitkUInt8)
+                stripped = sitk.Mask(img, brain_mask)
+                
+                out_ss_other = os.path.join(step_dir, f.replace(".nii.gz", "_SS.nii.gz"))
+                sitk.WriteImage(stripped, out_ss_other)
+                current_other_structural_paths[f] = out_ss_other
+        
+        # --- STEP 3: N4 BIAS CORRECTION ---
+        if 3 in steps:
+            print(f"   [{pid}] >> Running Step 3: N4 Bias Field Correction...")
+            step_dir = os.path.join(intermediates_root, "step_3", pid)
+            os.makedirs(step_dir, exist_ok=True)
+            
+            # Bias correct reference T1CE
+            out_bc_t1 = os.path.join(step_dir, os.path.basename(current_t1_path).replace(".nii.gz", "_BC.nii.gz"))
+            step_3_n4_bias_correction(
+                current_t1_path, current_mask_path, out_bc_t1,
+                shrink_factor=n4_params['shrink_factor'],
+                num_iters=n4_params['num_iters'],
+                convergence_thresh=n4_params['convergence_thresh']
+            )
+            current_t1_path = out_bc_t1
+            
+            # Bias correct all other structural scans
+            for f, f_path in current_other_structural_paths.items():
+                out_bc_other = os.path.join(step_dir, os.path.basename(f_path).replace(".nii.gz", "_BC.nii.gz"))
+                step_3_n4_bias_correction(
+                    f_path, current_mask_path, out_bc_other,
+                    shrink_factor=n4_params['shrink_factor'],
+                    num_iters=n4_params['num_iters'],
+                    convergence_thresh=n4_params['convergence_thresh']
+                )
+                current_other_structural_paths[f] = out_bc_other
+        
+        # --- STEP 5: TEMPLATE SPACE WARP ---
+        if 5 in steps:
+            print(f"   [{pid}] >> Running Step 5: Template Space Warping...")
+            if template_path and os.path.exists(template_path):
+                step_dir = os.path.join(intermediates_root, "step_5", pid)
+                os.makedirs(step_dir, exist_ok=True)
+                
+                other_images = []
+                
+                # Add all other structural scans
+                warp_structural_paths = {}
+                for f, f_path in current_other_structural_paths.items():
+                    out_warp_other = os.path.join(step_dir, os.path.basename(f_path).replace(".nii.gz", "_MNI.nii.gz"))
+                    other_images.append({'path': f_path, 'out': out_warp_other, 'is_mask': False})
+                    warp_structural_paths[f] = out_warp_other
+                    
+                # Add Brain Mask
+                out_warp_mask = None
+                if current_mask_path:
+                    out_warp_mask = os.path.join(step_dir, os.path.basename(current_mask_path).replace(".nii.gz", "_MNI.nii.gz"))
+                    other_images.append({'path': current_mask_path, 'out': out_warp_mask, 'is_mask': True})
+                    
+                # Add all tumor segmentations
+                warp_seg_paths = {}
+                for sf, sf_path in current_seg_paths.items():
+                    out_warp_seg = os.path.join(step_dir, sf.replace(".nii.gz", "_MNI.nii.gz"))
+                    other_images.append({'path': sf_path, 'out': out_warp_seg, 'is_mask': True})
+                    warp_seg_paths[sf] = out_warp_seg
+                
+                # Perform Warp
+                out_warp_t1 = os.path.join(step_dir, os.path.basename(current_t1_path).replace(".nii.gz", "_MNI.nii.gz"))
+                step_5_template_warp(current_t1_path, template_path, out_warp_t1, other_images=other_images)
+                
+                # Update active paths
+                current_t1_path = out_warp_t1
+                for f in current_other_structural_paths:
+                    current_other_structural_paths[f] = warp_structural_paths[f]
+                if current_mask_path:
+                    current_mask_path = out_warp_mask
+                for sf in current_seg_paths:
+                    current_seg_paths[sf] = warp_seg_paths[sf]
+            else:
+                print(f"   [{pid}] [Warning] [Skipping Step 5] Valid template_path reference was not provided in the YAML configuration.")
+        
+        # --- STEP 6: INTENSITY NORMALIZATION ---
+        if 6 in steps:
+            print(f"   [{pid}] >> Running Step 6: Percentile Intensity Normalization...")
+            step_dir = os.path.join(intermediates_root, "step_6", pid)
+            os.makedirs(step_dir, exist_ok=True)
+            
+            # Normalize Reference T1CE
+            out_norm_t1 = os.path.join(step_dir, os.path.basename(current_t1_path).replace(".nii.gz", "_IN.nii.gz"))
+            step_6_intensity_normalization(
+                current_t1_path, current_mask_path, out_norm_t1,
+                lower_p=in_params['lower_percentile'],
+                upper_p=in_params['upper_percentile'],
+                target_max=in_params['target_max']
+            )
+            current_t1_path = out_norm_t1
+            
+            # Normalize all other structural scans
+            for f, f_path in current_other_structural_paths.items():
+                out_norm_other = os.path.join(step_dir, os.path.basename(f_path).replace(".nii.gz", "_IN.nii.gz"))
+                step_6_intensity_normalization(
+                    f_path, current_mask_path, out_norm_other,
+                    lower_p=in_params['lower_percentile'],
+                    upper_p=in_params['upper_percentile'],
+                    target_max=in_params['target_max']
+                )
+                current_other_structural_paths[f] = out_norm_other
+        
+        # ==========================================
+        # MOVE FINAL PRODUCTS TO OUTPUT ROOT
+        # ==========================================
+        p_out_final_dir = os.path.join(output_dir, pid)
+        os.makedirs(p_out_final_dir, exist_ok=True)
+        
+        # Save Reference T1CE
+        t1_final_name = os.path.basename(current_t1_path)
+        sitk.WriteImage(sitk.ReadImage(current_t1_path), os.path.join(p_out_final_dir, t1_final_name))
+        print(f"   [{pid}] [Final Product Saved] T1-CE (Reference): {t1_final_name}")
+        
+        # Save all other structural scans
+        for f, f_path in current_other_structural_paths.items():
+            other_final_name = os.path.basename(f_path)
+            sitk.WriteImage(sitk.ReadImage(f_path), os.path.join(p_out_final_dir, other_final_name))
+            print(f"   [{pid}] [Final Product Saved] Structural Scan:    {other_final_name}")
+            
+        if current_mask_path:
+            mask_final_name = os.path.basename(current_mask_path)
+            sitk.WriteImage(sitk.ReadImage(current_mask_path), os.path.join(p_out_final_dir, mask_final_name))
+            print(f"   [{pid}] [Final Product Saved] Mask:               {mask_final_name}")
+            
+        # Save all segmentations
+        for sf, sf_path in current_seg_paths.items():
+            seg_final_name = os.path.basename(sf_path)
+            sitk.WriteImage(sitk.ReadImage(sf_path), os.path.join(p_out_final_dir, seg_final_name))
+            print(f"   [{pid}] [Final Product Saved] Tumor Segmentation:  {seg_final_name}")
+            
+        # Safely copy unprocessed files
+        processed_basenames = [os.path.basename(current_t1_path)] + \
+                              [os.path.basename(f_path) for f_path in current_other_structural_paths.values()] + \
+                              ([os.path.basename(current_mask_path)] if current_mask_path else []) + \
+                              [os.path.basename(sf_path) for sf_path in current_seg_paths.values()]
+                              
+        for f in all_p_files:
+            is_processed = False
+            for pb in processed_basenames:
+                pb_clean = pb.replace("_MNI", "").replace("_BC", "").replace("_aligned", "").replace("_IN", "").replace("_SS", "")
+                if f.split('.')[0] in pb_clean or pb_clean.split('.')[0] in f:
+                    is_processed = True
+                    break
+            
+            if not is_processed:
+                src_f = os.path.join(p_in_dir, f)
+                dest_f = os.path.join(p_out_final_dir, f)
+                if os.path.isfile(src_f) and not os.path.exists(dest_f):
+                    shutil.copy2(src_f, dest_f)
+                    print(f"   [{pid}] [Synchronized] Copied raw file as-is: {f}")
+                    
+        elapsed = time.time() - patient_start
+        print(f"   [{pid}] [Done] Successfully preprocessed in {elapsed:.1f}s.")
+        return None
+        
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        print(f"   [{pid}] [ERROR] Failed to preprocess patient: {error_msg}")
+        traceback.print_exc(file=sys.stdout)
+        return {"patient": pid, "error": error_msg}
+        
+    finally:
+        gc.collect()
+
+
 def run_pipeline(config_path):
     print("==================================================")
     print("      IDiA UNIFIED PREPROCESSING PIPELINE         ")
@@ -287,6 +577,7 @@ def run_pipeline(config_path):
     output_dir = config.get('output_dir')
     steps = config.get('steps', [1, 2, 3, 5, 6])
     device = config.get('device', 'cpu')
+    num_workers = config.get('num_workers', 1)
     
     # Algorithm details
     n4_params = config.get('n4_params', {'shrink_factor': 2, 'num_iters': 50, 'convergence_thresh': 1e-6})
@@ -298,6 +589,7 @@ def run_pipeline(config_path):
     print(f"  Output Root: {output_dir}")
     print(f"  Selected Pipeline Steps: {steps}")
     print(f"  Compute Device: {device}")
+    print(f"  Parallel Workers: {num_workers}")
     print(f"  Template Reference: {template_path if template_path else 'None (Required for Step 5)'}")
     print("----------------------\n")
     
@@ -320,195 +612,66 @@ def run_pipeline(config_path):
     
     print(f"Discovered {len(patient_ids)} candidate patient folders.")
     
+    # Optional patient subset selection
+    patient_list = config.get('patient_list')
+    patient_range = config.get('patient_range')
+    patient_limit = config.get('patient_limit')
+    
+    if patient_list:
+        if isinstance(patient_list, str):
+            patient_list = [patient_list]
+        patient_ids = [pid for pid in patient_ids if pid in patient_list]
+        print(f"   [Subset Selection] Selected {len(patient_ids)} patient(s) specified in 'patient_list'.")
+        
+    elif patient_range:
+        if isinstance(patient_range, list) and len(patient_range) == 2:
+            start_idx = max(1, int(patient_range[0])) - 1
+            end_idx = min(len(patient_ids), int(patient_range[1]))
+            patient_ids = patient_ids[start_idx:end_idx]
+            print(f"   [Subset Selection] Selected patient range {patient_range[0]} to {patient_range[1]} (Total: {len(patient_ids)}).")
+            
+    elif patient_limit:
+        limit = int(patient_limit)
+        patient_ids = patient_ids[:limit]
+        print(f"   [Subset Selection] Limited execution to the first {limit} patients.")
+        
     start_total_time = time.time()
     errors_list = []
     
-    # Iterate through patients
-    for idx, pid in enumerate(patient_ids):
-        print(f"\n[{idx+1}/{len(patient_ids)}] Processing Patient: {pid} ...")
-        patient_start = time.time()
+    if num_workers > 1:
+        import concurrent.futures
+        print(f"Launching multi-process processing pool with {num_workers} workers...")
+        # Set SimpleITK to single-threaded within workers to avoid thread oversubscription
+        sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(1)
         
-        try:
-            # Core modality mapping for Yale / UCSF matching
-            p_in_dir = os.path.join(input_dir, pid)
-            all_p_files = os.listdir(p_in_dir)
+        futures = []
+        with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+            for idx, pid in enumerate(patient_ids):
+                futures.append(executor.submit(
+                    preprocess_single_patient,
+                    pid, idx, len(patient_ids),
+                    input_dir, output_dir, steps, device, intermediates_root,
+                    n4_params, in_params, template_path
+                ))
             
-            # Auto-detect modal sequences
-            flair_file = next((f for f in all_p_files if "flair" in f.lower() and f.endswith(".nii.gz")), None)
-            t1ce_file = next((f for f in all_p_files if ("t1ce" in f.lower() or "t1post" in f.lower()) and f.endswith(".nii.gz")), None)
-            mask_file = next((f for f in all_p_files if "mask" in f.lower() or "bet" in f.lower()), None)
-            
-            # Fallback if no specific naming, just grab first two files
-            if not t1ce_file and len(all_p_files) > 0:
-                t1ce_file = [f for f in all_p_files if f.endswith(".nii.gz")][0]
-            
-            if not t1ce_file:
-                print(f"   [Warning] No readable NIfTI scans found for patient {pid}. Skipping.")
-                continue
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    res = future.result()
+                    if res:
+                        errors_list.append(res)
+                except Exception as e:
+                    print(f"   [Worker Crash] Worker raised exception: {e}")
+    else:
+        # Sequential Execution
+        for idx, pid in enumerate(patient_ids):
+            res = preprocess_single_patient(
+                pid, idx, len(patient_ids),
+                input_dir, output_dir, steps, device, intermediates_root,
+                n4_params, in_params, template_path
+            )
+            if res:
+                errors_list.append(res)
                 
-            print(f"   Detected Sequences:")
-            print(f"      - Reference/T1-post: {t1ce_file}")
-            print(f"      - Moving/FLAIR:      {flair_file if flair_file else 'N/A'}")
-            print(f"      - Pre-existing Mask: {mask_file if mask_file else 'N/A'}")
-            
-            # Setup intermediate track
-            current_t1_path = os.path.join(p_in_dir, t1ce_file)
-            current_flair_path = os.path.join(p_in_dir, flair_file) if flair_file else None
-            current_mask_path = os.path.join(p_in_dir, mask_file) if mask_file else None
-            
-            # ==========================================
-            # RUN STEPS SEQUENTIALLY
-            # ==========================================
-            
-            # --- STEP 1: CO-REGISTRATION ---
-            if 1 in steps:
-                print("   >> Running Step 1: Modality Co-registration...")
-                if current_flair_path:
-                    step_dir = os.path.join(intermediates_root, "step_1", pid)
-                    os.makedirs(step_dir, exist_ok=True)
-                    out_flair_aligned = os.path.join(step_dir, flair_file.replace(".nii.gz", "_aligned.nii.gz"))
-                    step_1_coregistration(current_flair_path, current_t1_path, out_flair_aligned)
-                    current_flair_path = out_flair_aligned
-                else:
-                    print("      [Skipping Step 1] FLAIR sequence not available for registration.")
-            
-            # --- STEP 2: SKULL STRIPPING ---
-            if 2 in steps:
-                print("   >> Running Step 2: HD-BET Skull Stripping...")
-                step_dir = os.path.join(intermediates_root, "step_2", pid)
-                os.makedirs(step_dir, exist_ok=True)
-                
-                out_ss_t1 = os.path.join(step_dir, t1ce_file.replace(".nii.gz", "_SS.nii.gz"))
-                out_mask = os.path.join(step_dir, t1ce_file.replace(".nii.gz", "_SS_bet.nii.gz"))
-                
-                step_2_skull_stripping(current_t1_path, out_ss_t1, out_mask, device=device)
-                
-                current_t1_path = out_ss_t1
-                current_mask_path = out_mask
-                
-                # If flair exists, strip it using the generated mask
-                if current_flair_path:
-                    flair_img = sitk.ReadImage(current_flair_path, sitk.sitkFloat32)
-                    brain_mask = sitk.ReadImage(current_mask_path, sitk.sitkUInt8)
-                    flair_stripped = sitk.Mask(flair_img, brain_mask)
-                    
-                    out_ss_flair = os.path.join(step_dir, flair_file.replace(".nii.gz", "_SS.nii.gz"))
-                    sitk.WriteImage(flair_stripped, out_ss_flair)
-                    current_flair_path = out_ss_flair
-            
-            # --- STEP 3: N4 BIAS CORRECTION ---
-            if 3 in steps:
-                print("   >> Running Step 3: N4 Bias Field Correction...")
-                step_dir = os.path.join(intermediates_root, "step_3", pid)
-                os.makedirs(step_dir, exist_ok=True)
-                
-                # Bias correct T1CE
-                out_bc_t1 = os.path.join(step_dir, os.path.basename(current_t1_path).replace(".nii.gz", "_BC.nii.gz"))
-                step_3_n4_bias_correction(
-                    current_t1_path, current_mask_path, out_bc_t1,
-                    shrink_factor=n4_params['shrink_factor'],
-                    num_iters=n4_params['num_iters'],
-                    convergence_thresh=n4_params['convergence_thresh']
-                )
-                current_t1_path = out_bc_t1
-                
-                # Bias correct FLAIR
-                if current_flair_path:
-                    out_bc_flair = os.path.join(step_dir, os.path.basename(current_flair_path).replace(".nii.gz", "_BC.nii.gz"))
-                    step_3_n4_bias_correction(
-                        current_flair_path, current_mask_path, out_bc_flair,
-                        shrink_factor=n4_params['shrink_factor'],
-                        num_iters=n4_params['num_iters'],
-                        convergence_thresh=n4_params['convergence_thresh']
-                    )
-                    current_flair_path = out_bc_flair
-            
-            # --- STEP 5: TEMPLATE SPACE WARP ---
-            if 5 in steps:
-                print("   >> Running Step 5: Template Space Warping...")
-                if template_path and os.path.exists(template_path):
-                    step_dir = os.path.join(intermediates_root, "step_5", pid)
-                    os.makedirs(step_dir, exist_ok=True)
-                    
-                    # Warp T1CE
-                    out_warp_t1 = os.path.join(step_dir, os.path.basename(current_t1_path).replace(".nii.gz", "_MNI.nii.gz"))
-                    step_5_template_warp(current_t1_path, template_path, out_warp_t1)
-                    current_t1_path = out_warp_t1
-                    
-                    # Warp FLAIR
-                    if current_flair_path:
-                        out_warp_flair = os.path.join(step_dir, os.path.basename(current_flair_path).replace(".nii.gz", "_MNI.nii.gz"))
-                        step_5_template_warp(current_flair_path, template_path, out_warp_flair)
-                        current_flair_path = out_warp_flair
-                        
-                    # Warp Mask if available
-                    if current_mask_path:
-                        out_warp_mask = os.path.join(step_dir, os.path.basename(current_mask_path).replace(".nii.gz", "_MNI.nii.gz"))
-                        step_5_template_warp(current_mask_path, template_path, out_warp_mask)
-                        current_mask_path = out_warp_mask
-                else:
-                    print("      [Skipping Step 5] Valid template_path reference was not provided in the YAML configuration.")
-            
-            # --- STEP 6: INTENSITY NORMALIZATION ---
-            if 6 in steps:
-                print("   >> Running Step 6: Percentile Intensity Normalization...")
-                step_dir = os.path.join(intermediates_root, "step_6", pid)
-                os.makedirs(step_dir, exist_ok=True)
-                
-                # Normalize T1CE
-                out_norm_t1 = os.path.join(step_dir, os.path.basename(current_t1_path).replace(".nii.gz", "_IN.nii.gz"))
-                step_6_intensity_normalization(
-                    current_t1_path, current_mask_path, out_norm_t1,
-                    lower_p=in_params['lower_percentile'],
-                    upper_p=in_params['upper_percentile'],
-                    target_max=in_params['target_max']
-                )
-                current_t1_path = out_norm_t1
-                
-                # Normalize FLAIR
-                if current_flair_path:
-                    out_norm_flair = os.path.join(step_dir, os.path.basename(current_flair_path).replace(".nii.gz", "_IN.nii.gz"))
-                    step_6_intensity_normalization(
-                        current_flair_path, current_mask_path, out_norm_flair,
-                        lower_p=in_params['lower_percentile'],
-                        upper_p=in_params['upper_percentile'],
-                        target_max=in_params['target_max']
-                    )
-                    current_flair_path = out_norm_flair
-            
-            # ==========================================
-            # MOVE FINAL PRODUCTS TO OUTPUT ROOT
-            # ==========================================
-            p_out_final_dir = os.path.join(output_dir, pid)
-            os.makedirs(p_out_final_dir, exist_ok=True)
-            
-            # Save final files nicely named
-            t1_final_name = os.path.basename(current_t1_path)
-            sitk.WriteImage(sitk.ReadImage(current_t1_path), os.path.join(p_out_final_dir, t1_final_name))
-            print(f"   [Final Product Saved] T1-CE: {t1_final_name}")
-            
-            if current_flair_path:
-                flair_final_name = os.path.basename(current_flair_path)
-                sitk.WriteImage(sitk.ReadImage(current_flair_path), os.path.join(p_out_final_dir, flair_final_name))
-                print(f"   [Final Product Saved] FLAIR: {flair_final_name}")
-                
-            if current_mask_path:
-                mask_final_name = os.path.basename(current_mask_path)
-                sitk.WriteImage(sitk.ReadImage(current_mask_path), os.path.join(p_out_final_dir, mask_final_name))
-                print(f"   [Final Product Saved] Mask:  {mask_final_name}")
-                
-            elapsed = time.time() - patient_start
-            print(f"   [Done] Successfully preprocessed patient {pid} in {elapsed:.1f}s.")
-            
-        except Exception as e:
-            error_msg = f"{type(e).__name__}: {str(e)}"
-            print(f"   [ERROR] Failed to preprocess patient {pid}: {error_msg}")
-            traceback.print_exc(file=sys.stdout)
-            errors_list.append({"patient": pid, "error": error_msg})
-            
-        finally:
-            gc.collect()
-            
     # Print ending summary
     total_time = time.time() - start_total_time
     print("\n==================================================")
