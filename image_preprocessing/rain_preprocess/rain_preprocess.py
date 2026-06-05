@@ -125,11 +125,16 @@ def step_1_coregistration(img_path, ref_path, output_path):
     R.SetMetricSamplingPercentage(0.15)
     R.SetInterpolator(sitk.sitkLinear)
     
-    # Rigid transformation (6 degrees of freedom in 3D)
-    tx = sitk.Euler3DTransform()
+    # Rigid transformation (6 degrees of freedom in 3D) center-initialized
+    tx = sitk.CenteredTransformInitializer(
+        fixed,
+        moving,
+        sitk.Euler3DTransform(),
+        sitk.CenteredTransformInitializerFilter.GEOMETRY
+    )
     R.SetInitialTransform(tx, inPlace=True)
     R.SetOptimizerAsGradientDescent(learningRate=1.0, numberOfIterations=100, estimateLearningRate=R.EachIteration)
-    R.SetOptimizerScalesFromPhysicalShifts()
+    R.SetOptimizerScalesFromPhysicalShift()
     
     # Run optimization
     out_tx = R.Execute(fixed, moving)
@@ -232,10 +237,16 @@ def step_5_template_warp(ref_path, template_path, output_ref_path, other_images=
     R.SetMetricSamplingPercentage(0.10)
     R.SetInterpolator(sitk.sitkLinear)
     
-    tx = sitk.AffineTransform(moving.GetDimension())
+    # Affine transformation center-initialized to align templates in physical space
+    tx = sitk.CenteredTransformInitializer(
+        fixed,
+        moving,
+        sitk.AffineTransform(moving.GetDimension()),
+        sitk.CenteredTransformInitializerFilter.GEOMETRY
+    )
     R.SetInitialTransform(tx, inPlace=True)
     R.SetOptimizerAsGradientDescent(learningRate=0.5, numberOfIterations=80, estimateLearningRate=R.EachIteration)
-    R.SetOptimizerScalesFromPhysicalShifts()
+    R.SetOptimizerScalesFromPhysicalShift()
     
     # Compute transform
     out_tx = R.Execute(fixed, moving)
