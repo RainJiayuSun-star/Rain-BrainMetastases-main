@@ -81,8 +81,17 @@ Open `config.yaml` and adjust the paths and settings:
 *   `device`: Set to `"cuda"` if you are running Step 2 (HD-BET) on a GPU-enabled machine, or `"cpu"` otherwise.
 
 ### 3. Run the Pipeline
-To start the pipeline execution:
+To start the pipeline execution, you can specify your configuration file using a named argument or a positional argument. If no file is specified, it defaults to `config.yaml` in the current directory:
 ```bash
+# Option A: Run using the named config flag (recommended)
+python rain_preprocess.py --config config.yaml
+# or short flag:
+python rain_preprocess.py -c config.yaml
+
+# Option B: Run with the default 'config.yaml' automatically
+python rain_preprocess.py
+
+# Option C: Run using the positional argument (backwards compatible)
 python rain_preprocess.py config.yaml
 ```
 
@@ -125,7 +134,7 @@ device: "cuda"  # for GPU skull stripping
 Then start the execution:
 ```bash
 cd /workspace/rain_preprocess
-python rain_preprocess.py config.yaml
+python rain_preprocess.py --config config.yaml
 ```
 
 ---

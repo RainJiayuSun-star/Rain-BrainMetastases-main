@@ -15,6 +15,7 @@ Requirements:
 import os
 import sys
 import time
+import argparse
 import gc
 import json
 import shutil
@@ -687,9 +688,28 @@ def run_pipeline(config_path):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python rain_preprocess.py <path_to_config.yaml>")
+    parser = argparse.ArgumentParser(description="IDiA Lab Unified Preprocessing Pipeline")
+    parser.add_argument(
+        "-c", "--config",
+        type=str,
+        default="config.yaml",
+        help="Path to the YAML configuration file (default: config.yaml)"
+    )
+    parser.add_argument(
+        "config_pos",
+        nargs="?",
+        type=str,
+        default=None,
+        help="Path to the YAML configuration file (positional argument fallback)"
+    )
+    
+    args = parser.parse_args()
+    
+    # Prioritize positional argument for backwards compatibility, otherwise use --config
+    config_file = args.config_pos if args.config_pos else args.config
+    
+    if not os.path.exists(config_file):
+        print(f"Error: Configuration file '{config_file}' not found.")
         sys.exit(1)
         
-    config_file = sys.argv[1]
     run_pipeline(config_file)
