@@ -1,0 +1,35 @@
+# Use an official Python runtime as a parent image
+FROM python:3.10-slim
+
+# Set environment variables to prevent python from writing pyc files and buffering stdout
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies required by Rain's and Jared's preprocessing scripts
+RUN pip install --no-cache-dir \
+    numpy \
+    pandas \
+    SimpleITK \
+    PyYAML \
+    fpdf2 \
+    openpyxl
+
+# Note on HD-BET / PyTorch:
+# The above packages cover Co-registration (Step 1), Bias Correction (Step 3), 
+# Template Warping (Step 5), and Intensity Normalization (Step 6).
+# If you plan to run HD-BET (Step 2) for skull stripping raw images in the future, 
+# you would need to change the base image to a PyTorch GPU image (e.g., pytorch/pytorch:latest)
+# and install torch, nnunetv2, and HD-BET here. Since your data is already skull-stripped,
+# this lightweight image is much faster to build and run.
+
+# The CMD instruction specifies what to run when the container starts.
+# We set it to bash so you can interact with it or pass commands directly.
+CMD ["bash"]
