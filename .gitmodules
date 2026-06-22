@@ -1,6 +1,3 @@
-[submodule "nnUNet_rain"]
-	path = nnUNet_rain
-	url = https://github.com/RainJiayuSun-star/nnUNet_rain.git
 [submodule "train/nnUNet_rain"]
 	path = train/nnUNet_rain
 	url = https://github.com/RainJiayuSun-star/nnUNet_rain.git
