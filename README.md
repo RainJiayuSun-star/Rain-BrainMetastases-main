@@ -22,4 +22,17 @@ Supervised by Jordan Bramble @ UW Madison
         - HD95 (95th percentile Hausdorff distance)
         - IoU (intersection over Union)
 
+## Submodules
 
+This repository uses [nnUNet_rain](https://github.com/RainJiayuSun-star/nnUNet_rain) as a Git submodule for model training using nnUnet architecture under `train/nnUNet_rain`.
+
+**To clone this repository with the submodule included:**
+```bash
+git clone --recurse-submodules https://github.com/RainJiayuSun-star/Rain-BrainMetastases-main.git
+```
+
+**If you already cloned this repository without the submodule:**
+You can fetch and initialize the submodule at any time by running the following command from the root of this repository:
+```bash
+git submodule update --init --recursive
+```
