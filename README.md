@@ -36,3 +36,7 @@ You can fetch and initialize the submodule at any time by running the following 
 ```bash
 git submodule update --init --recursive
 ```
+If updating the local submodule to from the remote repo:
+```bash
+git submodule update --remote --merge
+```
